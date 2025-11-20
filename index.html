@@ -1,0 +1,1041 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>新上國小課後社團報名系統</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Babel for JSX transformation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Prevent flash of unstyled content -->
+    <style>
+        body { display: none; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        // --- Imports from CDNs ---
+        import React, { useState, useEffect, useMemo, useRef } from 'https://esm.sh/react@18.2.0';
+        import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
+        
+        // Lucide Icons
+        import { 
+            User, LogOut, Calendar, Clock, MapPin, DollarSign, Users, Settings, 
+            Plus, Trash2, Edit, Download, Upload, AlertTriangle, FileSpreadsheet, 
+            CheckCircle, Phone, Loader2, Shield, List, XCircle, FileUp, Filter 
+        } from 'https://esm.sh/lucide-react@0.292.0';
+
+        // Firebase SDKs
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js';
+        import { 
+            getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, 
+            signOut, onAuthStateChanged, updateProfile 
+        } from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js';
+        import { 
+            getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc, 
+            updateDoc, deleteDoc, onSnapshot, query, where, serverTimestamp, 
+            writeBatch, increment, limit 
+        } from 'https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js';
+
+        // --- Firebase Configuration ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBJTRVbX6tYLPuUeQ22Na4JLhII6BrHW6o",
+            authDomain: "afterschool-8afcf.firebaseapp.com",
+            projectId: "afterschool-8afcf",
+            storageBucket: "afterschool-8afcf.firebasestorage.app",
+            messagingSenderId: "503971252052",
+            appId: "1:503971252052:web:750301c13a1bd88258eac1",
+            measurementId: "G-ZKY26DX7E9"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        
+        // App ID constant for standalone version
+        const appId = 'default-app-id';
+
+        // --- Components ---
+
+        const Notification = ({ message, type, onClose }) => {
+            if (!message) return null;
+            const bgColor = type === 'error' ? 'bg-red-100 text-red-800 border-red-200' : 'bg-green-100 text-green-800 border-green-200';
+            
+            return (
+                <div className="fixed top-4 right-4 z-50 animate-fade-in">
+                    <div className={`px-4 py-3 rounded-lg shadow-lg border flex items-center gap-2 ${bgColor}`}>
+                        {type === 'error' ? <AlertTriangle size={18} /> : <CheckCircle size={18} />}
+                        <span>{message}</span>
+                        <button onClick={onClose} className="ml-4 font-bold hover:opacity-75">✕</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const AuthModal = ({ isOpen, onClose, setUser }) => {
+            const [isRegister, setIsRegister] = useState(false);
+            const [email, setEmail] = useState('');
+            const [password, setPassword] = useState('');
+            const [name, setName] = useState('');
+            const [phone, setPhone] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState('');
+
+            if (!isOpen) return null;
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setLoading(true);
+                setError('');
+                try {
+                    let userCredential;
+                    if (isRegister) {
+                        userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                        await updateProfile(userCredential.user, { displayName: name });
+                        
+                        let role = 'user';
+                        if (email === 'admin@demo.com') {
+                            role = 'admin';
+                        } else {
+                            try {
+                                const usersRef = collection(db, 'artifacts', appId, 'public', 'data', 'users');
+                                const q = query(usersRef, limit(1));
+                                const snapshot = await getDocs(q);
+                                if (snapshot.empty) role = 'admin';
+                            } catch (checkErr) {
+                                console.warn("Admin check skipped:", checkErr);
+                            }
+                        }
+
+                        try {
+                            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', userCredential.user.uid), {
+                                name: name,
+                                phone: phone,
+                                email: email,
+                                role: role,
+                                createdAt: serverTimestamp()
+                            });
+                        } catch (profileErr) {
+                            console.warn("Profile creation error:", profileErr);
+                        }
+                    } else {
+                        userCredential = await signInWithEmailAndPassword(auth, email, password);
+                    }
+                    onClose();
+                } catch (err) {
+                    console.error(err);
+                    setError(err.message.includes('auth/invalid-credential') ? '帳號或密碼錯誤' : '發生錯誤，請稍後再試');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+                        <div className="bg-blue-600 p-4 text-white text-center font-bold text-xl">
+                            {isRegister ? '家長註冊' : '會員登入'}
+                        </div>
+                        <div className="p-6">
+                            {error && <div className="mb-4 p-2 bg-red-100 text-red-600 text-sm rounded">{error}</div>}
+                            <form onSubmit={handleSubmit} className="space-y-4">
+                                {isRegister && (
+                                    <>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">家長姓名</label>
+                                            <input 
+                                                type="text" 
+                                                required 
+                                                className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none"
+                                                value={name}
+                                                onChange={(e) => setName(e.target.value)}
+                                                placeholder="請輸入家長真實姓名"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">家長聯絡電話</label>
+                                            <input 
+                                                type="tel" 
+                                                required 
+                                                className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none"
+                                                value={phone}
+                                                onChange={(e) => setPhone(e.target.value)}
+                                                placeholder="例如: 0912345678"
+                                            />
+                                        </div>
+                                    </>
+                                )}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                                    <input 
+                                        type="email" 
+                                        required 
+                                        className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none"
+                                        value={email}
+                                        onChange={(e) => setEmail(e.target.value)}
+                                        placeholder={isRegister ? "建議使用 admin@demo.com 測試管理員" : ""}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">密碼</label>
+                                    <input 
+                                        type="password" 
+                                        required 
+                                        className="w-full p-2 border rounded focus:ring-2 focus:ring-blue-500 outline-none"
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                    />
+                                </div>
+                                <button 
+                                    type="submit" 
+                                    disabled={loading}
+                                    className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition disabled:opacity-50 flex justify-center"
+                                >
+                                    {loading ? <Loader2 className="animate-spin" /> : (isRegister ? '註冊' : '登入')}
+                                </button>
+                            </form>
+                            <div className="mt-4 text-center text-sm text-gray-600">
+                                {isRegister ? '已有帳號？' : '還沒有帳號？'}
+                                <button 
+                                    onClick={() => setIsRegister(!isRegister)} 
+                                    className="text-blue-600 font-bold ml-1 hover:underline"
+                                >
+                                    {isRegister ? '立即登入' : '立即註冊'}
+                                </button>
+                            </div>
+                            <button onClick={onClose} className="mt-4 w-full text-gray-400 text-sm hover:text-gray-600">取消</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const RegistrationModal = ({ isOpen, onClose, club, onConfirm }) => {
+            const [studentName, setStudentName] = useState('');
+            const [studentClass, setStudentClass] = useState('');
+
+            useEffect(() => {
+                if (isOpen) {
+                    setStudentName('');
+                    setStudentClass('');
+                }
+            }, [isOpen]);
+
+            if (!isOpen || !club) return null;
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                onConfirm(studentName, studentClass);
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden animate-fade-in">
+                        <div className="bg-blue-600 p-4 text-white font-bold text-xl flex justify-between items-center">
+                            <span>報名確認</span>
+                            <button onClick={onClose} className="hover:text-blue-200">✕</button>
+                        </div>
+                        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+                            <div className="bg-blue-50 p-3 rounded-lg mb-4">
+                                <div className="text-sm text-blue-800 font-bold">您正在報名：</div>
+                                <div className="text-lg text-blue-900 font-bold">{club.name}</div>
+                                <div className="text-sm text-blue-600">{club.time}</div>
+                            </div>
+                            
+                            <div>
+                                <label className="block text-sm font-bold text-gray-700 mb-1">學生班級 <span className="text-red-500">*</span></label>
+                                <input 
+                                    type="text" 
+                                    required 
+                                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                    value={studentClass}
+                                    onChange={(e) => setStudentClass(e.target.value)}
+                                    placeholder="例如：301、502"
+                                />
+                            </div>
+                            
+                            <div>
+                                <label className="block text-sm font-bold text-gray-700 mb-1">學生姓名 <span className="text-red-500">*</span></label>
+                                <input 
+                                    type="text" 
+                                    required 
+                                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                    value={studentName}
+                                    onChange={(e) => setStudentName(e.target.value)}
+                                    placeholder="請輸入學生真實姓名"
+                                />
+                            </div>
+
+                            <div className="pt-2 flex gap-3">
+                                <button 
+                                    type="button" 
+                                    onClick={onClose} 
+                                    className="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg font-bold hover:bg-gray-200 transition"
+                                >
+                                    取消
+                                </button>
+                                <button 
+                                    type="submit" 
+                                    className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-bold hover:bg-blue-700 transition shadow-md"
+                                >
+                                    確認報名
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        const ClubFormModal = ({ isOpen, onClose, editData, onSave }) => {
+            const [formData, setFormData] = useState({
+                name: '', teacher: '', time: '', location: '', grade: '', 
+                fee: '', materialFee: '0', quota: '20', reserveQuota: '5', description: ''
+            });
+
+            useEffect(() => {
+                if (editData) {
+                    setFormData({
+                        name: editData.name || '',
+                        teacher: editData.teacher || '',
+                        time: editData.time || '',
+                        location: editData.location || '',
+                        grade: editData.grade || '',
+                        fee: editData.fee || '',
+                        materialFee: editData.materialFee || '',
+                        quota: editData.quota || '',
+                        reserveQuota: editData.reserveQuota || '',
+                        description: editData.description || ''
+                    });
+                } else {
+                    setFormData({
+                        name: '', teacher: '', time: '', location: '', grade: '', 
+                        fee: '', materialFee: '0', quota: '20', reserveQuota: '5', description: ''
+                    });
+                }
+            }, [editData, isOpen]);
+
+            if (!isOpen) return null;
+
+            const handleChange = (e) => {
+                const { name, value } = e.target;
+                setFormData(prev => ({ ...prev, [name]: value }));
+            };
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                onSave({
+                    ...formData,
+                    fee: Number(formData.fee),
+                    materialFee: Number(formData.materialFee),
+                    quota: Number(formData.quota),
+                    reserveQuota: Number(formData.reserveQuota)
+                });
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                        <div className="bg-green-600 p-4 text-white font-bold flex justify-between items-center">
+                            <span>{editData ? '編輯社團' : '新增社團'}</span>
+                            <button onClick={onClose} className="text-white hover:text-green-200">✕</button>
+                        </div>
+                        <form onSubmit={handleSubmit} className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="md:col-span-2">
+                                <label className="block text-xs font-bold text-gray-500 uppercase">社團名稱</label>
+                                <input name="name" value={formData.name} onChange={handleChange} required className="w-full p-2 border rounded" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">指導老師</label>
+                                <input name="teacher" value={formData.teacher} onChange={handleChange} required className="w-full p-2 border rounded" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">上課地點</label>
+                                <input name="location" value={formData.location} onChange={handleChange} required className="w-full p-2 border rounded" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">上課時間</label>
+                                <input name="time" value={formData.time} onChange={handleChange} required placeholder="例: 週一 16:00-17:30" className="w-full p-2 border rounded" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">招收年級</label>
+                                <input name="grade" value={formData.grade} onChange={handleChange} required placeholder="例: 3-6年級" className="w-full p-2 border rounded" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">學費 ($)</label>
+                                <input type="number" name="fee" value={formData.fee} onChange={handleChange} required className="w-full p-2 border rounded" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">材料費 ($)</label>
+                                <input type="number" name="materialFee" value={formData.materialFee} onChange={handleChange} required className="w-full p-2 border rounded" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">正取名額</label>
+                                <input type="number" name="quota" value={formData.quota} onChange={handleChange} required className="w-full p-2 border rounded" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase">備取名額</label>
+                                <input type="number" name="reserveQuota" value={formData.reserveQuota} onChange={handleChange} required className="w-full p-2 border rounded" />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="block text-xs font-bold text-gray-500 uppercase">社團簡介/備註</label>
+                                <textarea name="description" value={formData.description} onChange={handleChange} rows="3" className="w-full p-2 border rounded"></textarea>
+                            </div>
+                            <div className="md:col-span-2 flex justify-end gap-2 mt-4">
+                                <button type="button" onClick={onClose} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">取消</button>
+                                <button type="submit" className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-bold">儲存設定</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Main Application ---
+        function App() {
+            const [user, setUser] = useState(null);
+            const [userProfile, setUserProfile] = useState(null); 
+            const [authModalOpen, setAuthModalOpen] = useState(false);
+            const [notification, setNotification] = useState(null);
+            const [clubs, setClubs] = useState([]);
+            const [settings, setSettings] = useState({ start: '', end: '', manualOpen: null });
+            const [registrations, setRegistrations] = useState([]);
+            const [userRegistrations, setUserRegistrations] = useState([]);
+            
+            const [registeringClub, setRegisteringClub] = useState(null);
+            
+            // Admin State
+            const [isAdmin, setIsAdmin] = useState(false);
+            const [clubModalOpen, setClubModalOpen] = useState(false);
+            const [editingClub, setEditingClub] = useState(null);
+            const [adminRegFilter, setAdminRegFilter] = useState('all'); 
+
+            // File Import Refs
+            const clubFileInputRef = useRef(null);
+            const regFileInputRef = useRef(null);
+
+            // --- Effects ---
+
+            useEffect(() => {
+                let unsubUser = null;
+
+                const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+                    setUser(currentUser);
+                    
+                    if (unsubUser) {
+                        unsubUser();
+                        unsubUser = null;
+                    }
+
+                    if (currentUser) {
+                        if (currentUser.email === 'admin@demo.com') {
+                            setIsAdmin(true);
+                            setUserProfile({ name: currentUser.displayName || '管理員', phone: '', role: 'admin' });
+                        } else {
+                            const userDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', currentUser.uid);
+                            unsubUser = onSnapshot(userDocRef, (docSnap) => {
+                                if (docSnap.exists()) {
+                                    const data = docSnap.data();
+                                    setUserProfile(data);
+                                    setIsAdmin(data.role === 'admin');
+                                } else {
+                                    setUserProfile({ name: currentUser.displayName || '家長', phone: '' });
+                                    setIsAdmin(false);
+                                }
+                            }, (error) => {
+                                console.warn("Profile stream error:", error);
+                            });
+                        }
+                    } else {
+                        setIsAdmin(false);
+                        setUserProfile(null);
+                    }
+                });
+
+                return () => {
+                    unsubscribeAuth();
+                    if (unsubUser) unsubUser();
+                };
+            }, []);
+
+            useEffect(() => {
+                const clubsRef = collection(db, 'artifacts', appId, 'public', 'data', 'clubs');
+                const unsubClubs = onSnapshot(clubsRef, (snapshot) => {
+                    const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    list.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+                    setClubs(list);
+                }, (err) => console.error("Clubs stream error:", err));
+
+                const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config');
+                const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        setSettings(docSnap.data());
+                    }
+                });
+
+                const regsRef = collection(db, 'artifacts', appId, 'public', 'data', 'registrations');
+                const unsubRegs = onSnapshot(regsRef, (snapshot) => {
+                    const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setRegistrations(list);
+                }, (err) => console.error("Registrations stream error:", err));
+
+                return () => {
+                    unsubClubs();
+                    unsubSettings();
+                    unsubRegs();
+                };
+            }, []);
+
+            useEffect(() => {
+                if (user && registrations.length > 0) {
+                    const myRegs = registrations.filter(r => r.userId === user.uid);
+                    setUserRegistrations(myRegs);
+                } else {
+                    setUserRegistrations([]);
+                }
+            }, [user, registrations]);
+
+            // --- Logic ---
+
+            const isRegistrationOpen = useMemo(() => {
+                if (settings.manualOpen === true) return true;
+                if (settings.manualOpen === false) return false;
+                
+                if (!settings.start || !settings.end) return false;
+                const now = new Date().getTime();
+                const start = new Date(settings.start).getTime();
+                const end = new Date(settings.end).getTime();
+                return now >= start && now <= end;
+            }, [settings]);
+
+            const getClubStats = (clubId) => {
+                const clubRegs = registrations.filter(r => r.clubId === clubId);
+                const mainCount = clubRegs.filter(r => r.status === 'main').length;
+                const reserveCount = clubRegs.filter(r => r.status === 'reserve').length;
+                return { mainCount, reserveCount, clubRegs };
+            };
+
+            const showNotification = (msg, type = 'success') => {
+                setNotification({ message: msg, type });
+                setTimeout(() => setNotification(null), 3000);
+            };
+
+            const handleSaveClub = async (clubData) => {
+                try {
+                    const clubsRef = collection(db, 'artifacts', appId, 'public', 'data', 'clubs');
+                    if (editingClub) {
+                        await updateDoc(doc(clubsRef, editingClub.id), clubData);
+                        showNotification('社團資料已更新');
+                    } else {
+                        await addDoc(clubsRef, { ...clubData, createdAt: serverTimestamp() });
+                        showNotification('新增社團成功');
+                    }
+                    setClubModalOpen(false);
+                    setEditingClub(null);
+                } catch (e) {
+                    showNotification('儲存失敗: ' + e.message, 'error');
+                }
+            };
+
+            const handleDeleteClub = async (id) => {
+                if (!confirm('確定要刪除此社團嗎？')) return;
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'clubs', id));
+                    showNotification('社團已刪除');
+                } catch (e) {
+                    showNotification('刪除失敗', 'error');
+                }
+            };
+
+            const handleUpdateSettings = async (newSettings) => {
+                try {
+                    const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'config');
+                    await setDoc(settingsRef, newSettings, { merge: true });
+                    showNotification('系統設定已更新');
+                } catch (e) {
+                    showNotification('設定更新失敗', 'error');
+                }
+            };
+
+            const handleRegisterClick = (club) => {
+                if (!user) {
+                    setAuthModalOpen(true);
+                    return;
+                }
+                const { mainCount, reserveCount } = getClubStats(club.id);
+                if (mainCount >= club.quota && reserveCount >= club.reserveQuota) {
+                    showNotification('名額已滿', 'error');
+                    return;
+                }
+                setRegisteringClub(club);
+            };
+
+            const confirmRegistration = async (studentName, studentClass) => {
+                if (!user || !registeringClub) return;
+                
+                const { mainCount, reserveCount } = getClubStats(registeringClub.id);
+                let status = 'main';
+                
+                if (mainCount >= registeringClub.quota) {
+                    if (reserveCount >= registeringClub.reserveQuota) {
+                        showNotification('抱歉，就在剛剛名額已滿', 'error');
+                        setRegisteringClub(null);
+                        return;
+                    }
+                    status = 'reserve';
+                }
+
+                try {
+                    const regRef = collection(db, 'artifacts', appId, 'public', 'data', 'registrations');
+                    await addDoc(regRef, {
+                        userId: user.uid,
+                        userEmail: user.email,
+                        parentName: userProfile?.name || user.displayName || '家長',
+                        parentPhone: userProfile?.phone || '',
+                        studentName: studentName, 
+                        studentClass: studentClass, 
+                        clubId: registeringClub.id,
+                        clubName: registeringClub.name,
+                        status: status,
+                        timestamp: serverTimestamp()
+                    });
+                    showNotification(`報名成功！${studentName} 為 ${status === 'main' ? '正取' : '備取'}`);
+                    setRegisteringClub(null);
+                } catch (e) {
+                    showNotification('報名失敗: ' + e.message, 'error');
+                }
+            };
+
+            const handleCancelRegistration = async (regId) => {
+                if (!confirm('確定要取消此筆報名嗎？')) return;
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'registrations', regId));
+                    showNotification('已取消報名');
+                } catch (e) {
+                    showNotification('取消失敗', 'error');
+                }
+            };
+
+            const clearAllData = async (collectionName) => {
+                if (!confirm('確定要清空資料嗎？請輸入 "DELETE" 確認。')) return;
+                const userInput = prompt('請輸入 "DELETE" 確認刪除');
+                if (userInput !== 'DELETE') return;
+
+                try {
+                    const batch = writeBatch(db);
+                    const snapshot = collectionName === 'clubs' ? await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'clubs')) :
+                                    await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'registrations'));
+                    
+                    snapshot.docs.forEach((doc) => {
+                        batch.delete(doc.ref);
+                    });
+                    await batch.commit();
+                    showNotification('資料已全部清空');
+                } catch (e) {
+                    showNotification('清空失敗', 'error');
+                }
+            };
+
+            const exportCSV = (type) => {
+                let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+                if (type === 'clubs') {
+                    csvContent += "社團名稱,老師,時間,地點,費用,材料費,正取數,備取數\n";
+                    clubs.forEach(c => {
+                        csvContent += `${c.name},${c.teacher},${c.time},${c.location},${c.fee},${c.materialFee},${c.quota},${c.reserveQuota}\n`;
+                    });
+                } else {
+                    csvContent += "社團名稱,學生班級,學生姓名,家長姓名,聯絡電話,狀態,報名時間\n";
+                    registrations.forEach(r => {
+                        const time = r.timestamp ? new Date(r.timestamp.seconds * 1000).toLocaleString() : '';
+                        csvContent += `${r.clubName},${r.studentClass || ''},${r.studentName || ''},${r.parentName || r.userName},${r.parentPhone || r.userPhone || ''},${r.status === 'main' ? '正取' : '備取'},${time}\n`;
+                    });
+                }
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `${type}_export.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const handleFileUpload = async (event, type) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const text = e.target.result;
+                    const rows = text.split('\n').slice(1); // Skip header
+                    const batch = writeBatch(db);
+                    let count = 0;
+
+                    try {
+                        if (type === 'clubs') {
+                            const collectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'clubs');
+                            rows.forEach(row => {
+                                const cols = row.split(',');
+                                if (cols.length >= 8) {
+                                    const newDoc = doc(collectionRef);
+                                    batch.set(newDoc, {
+                                        name: cols[0]?.trim() || '',
+                                        teacher: cols[1]?.trim() || '',
+                                        time: cols[2]?.trim() || '',
+                                        location: cols[3]?.trim() || '',
+                                        fee: Number(cols[4]) || 0,
+                                        materialFee: Number(cols[5]) || 0,
+                                        quota: Number(cols[6]) || 0,
+                                        reserveQuota: Number(cols[7]) || 0,
+                                        createdAt: serverTimestamp()
+                                    });
+                                    count++;
+                                }
+                            });
+                        } else if (type === 'regs') {
+                            const collectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'registrations');
+                            rows.forEach(row => {
+                                const cols = row.split(',');
+                                if (cols.length >= 6) {
+                                    const newDoc = doc(collectionRef);
+                                    const clubName = cols[0]?.trim() || '';
+                                    const matchedClub = clubs.find(c => c.name === clubName);
+                                    
+                                    batch.set(newDoc, {
+                                        clubName: clubName,
+                                        clubId: matchedClub ? matchedClub.id : 'imported_unknown_id',
+                                        studentClass: cols[1]?.trim() || '',
+                                        studentName: cols[2]?.trim() || '',
+                                        parentName: cols[3]?.trim() || '',
+                                        parentPhone: cols[4]?.trim() || '',
+                                        status: cols[5]?.trim() === '正取' ? 'main' : 'reserve',
+                                        userId: 'imported_admin_action', 
+                                        userEmail: 'imported',
+                                        timestamp: serverTimestamp()
+                                    });
+                                    count++;
+                                }
+                            });
+                        }
+                        await batch.commit();
+                        showNotification(`成功匯入 ${count} 筆資料`);
+                    } catch (err) {
+                        console.error(err);
+                        showNotification('匯入失敗：格式錯誤或網路問題', 'error');
+                    }
+                    event.target.value = '';
+                };
+                reader.readAsText(file);
+            };
+
+            const filteredAdminRegs = adminRegFilter === 'all' 
+                ? registrations 
+                : registrations.filter(r => r.clubId === adminRegFilter);
+
+            return (
+                <div className="min-h-screen bg-gray-50 font-sans text-gray-800">
+                    {notification && <Notification message={notification.message} type={notification.type} onClose={() => setNotification(null)} />}
+                    
+                    <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} setUser={setUser} />
+                    
+                    <RegistrationModal 
+                        isOpen={!!registeringClub} 
+                        onClose={() => setRegisteringClub(null)} 
+                        club={registeringClub}
+                        onConfirm={confirmRegistration}
+                    />
+                    
+                    <ClubFormModal 
+                        isOpen={clubModalOpen} 
+                        onClose={() => { setClubModalOpen(false); setEditingClub(null); }} 
+                        editData={editingClub}
+                        onSave={handleSaveClub}
+                    />
+
+                    <header className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-40">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="bg-blue-600 p-2 rounded-lg">
+                                    <Users className="text-white" size={24} />
+                                </div>
+                                <h1 className="text-2xl font-bold text-blue-900 tracking-wide hidden sm:block">新上國小課後社團報名系統</h1>
+                                <h1 className="text-xl font-bold text-blue-900 sm:hidden">課後社團報名</h1>
+                            </div>
+
+                            <div className="flex items-center gap-4">
+                                {user ? (
+                                    <div className="flex items-center gap-4">
+                                        <div className="text-right hidden md:block">
+                                            <div className="text-sm font-bold text-gray-700">{userProfile?.name || user.displayName || '家長'}</div>
+                                            <div className="text-xs text-gray-500 flex items-center justify-end gap-1">
+                                                {isAdmin && <Shield size={12} className="text-blue-600" />}
+                                                {isAdmin ? '管理員' : (userProfile?.phone || '會員')}
+                                            </div>
+                                        </div>
+                                        <button onClick={() => signOut(auth)} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-bold transition flex items-center gap-2 shadow-sm">
+                                            <LogOut size={16} /> 登出
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <button onClick={() => setAuthModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm font-bold transition shadow-blue-200 shadow-lg flex items-center gap-2">
+                                        <User size={16} /> 登入 / 註冊
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+                        {isAdmin && (
+                            <>
+                                <section className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                    <div className="bg-gray-800 text-white px-6 py-4 flex justify-between items-center">
+                                        <h2 className="text-lg font-bold flex items-center gap-2"><Settings size={20} /> 管理員設定</h2>
+                                        <span className="text-xs bg-gray-700 px-2 py-1 rounded">Admin Mode</span>
+                                    </div>
+                                    <div className="p-6 space-y-6">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            <div className="space-y-2">
+                                                <label className="block text-sm font-bold text-gray-600">報名開始時間</label>
+                                                <input type="datetime-local" value={settings.start || ''} onChange={(e) => setSettings(s => ({...s, start: e.target.value}))} className="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 outline-none"/>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <label className="block text-sm font-bold text-gray-600">報名結束時間</label>
+                                                <div className="flex gap-2">
+                                                    <input type="datetime-local" value={settings.end || ''} onChange={(e) => setSettings(s => ({...s, end: e.target.value}))} className="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 outline-none"/>
+                                                    <button onClick={() => handleUpdateSettings(settings)} className="bg-blue-600 text-white px-4 rounded-lg font-bold hover:bg-blue-700">儲存</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="flex flex-wrap gap-3 pt-4 border-t border-gray-100">
+                                            <button onClick={() => handleUpdateSettings({ ...settings, manualOpen: true })} className="bg-green-500 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-600 flex items-center gap-2"><CheckCircle size={18} /> 立即開放</button>
+                                            <button onClick={() => handleUpdateSettings({ ...settings, manualOpen: false })} className="bg-gray-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-gray-700 flex items-center gap-2"><AlertTriangle size={18} /> 立即關閉</button>
+                                            <div className="flex-grow"></div>
+                                            <button onClick={() => setClubModalOpen(true)} className="bg-green-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-green-700 flex items-center gap-2"><Plus size={18} /> 新增社團</button>
+                                        </div>
+                                        <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div className="space-y-2">
+                                                <h3 className="font-bold text-gray-700">社團資料管理</h3>
+                                                <div className="flex gap-2 flex-wrap">
+                                                    <button onClick={() => exportCSV('clubs')} className="bg-blue-500 text-white px-3 py-1.5 rounded text-sm hover:bg-blue-600 flex items-center gap-1"><Download size={14}/> 匯出清單</button>
+                                                    <input type="file" accept=".csv" ref={clubFileInputRef} onChange={(e) => handleFileUpload(e, 'clubs')} className="hidden" />
+                                                    <button onClick={() => clubFileInputRef.current.click()} className="bg-purple-500 text-white px-3 py-1.5 rounded text-sm hover:bg-purple-600 flex items-center gap-1"><FileUp size={14}/> 匯入社團</button>
+                                                    <button onClick={() => clearAllData('clubs')} className="bg-red-500 text-white px-3 py-1.5 rounded text-sm hover:bg-red-600 flex items-center gap-1"><Trash2 size={14}/> 清空社團</button>
+                                                </div>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <h3 className="font-bold text-gray-700">報名資料管理</h3>
+                                                <div className="flex gap-2 flex-wrap">
+                                                    <button onClick={() => exportCSV('regs')} className="bg-blue-500 text-white px-3 py-1.5 rounded text-sm hover:bg-blue-600 flex items-center gap-1"><FileSpreadsheet size={14}/> 匯出報名</button>
+                                                    <input type="file" accept=".csv" ref={regFileInputRef} onChange={(e) => handleFileUpload(e, 'regs')} className="hidden" />
+                                                    <button onClick={() => regFileInputRef.current.click()} className="bg-purple-500 text-white px-3 py-1.5 rounded text-sm hover:bg-purple-600 flex items-center gap-1"><FileUp size={14}/> 匯入報名</button>
+                                                    <button onClick={() => clearAllData('regs')} className="bg-red-500 text-white px-3 py-1.5 rounded text-sm hover:bg-red-600 flex items-center gap-1"><Trash2 size={14}/> 清空報名</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                {/* Admin Registration Overview */}
+                                <section className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                    <div className="px-6 py-4 border-b border-gray-200 bg-gray-50 flex flex-col sm:flex-row justify-between items-center gap-4">
+                                        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                            <List size={20} /> 報名情形總覽
+                                        </h2>
+                                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                                            <Filter size={16} className="text-gray-500" />
+                                            <select 
+                                                value={adminRegFilter} 
+                                                onChange={(e) => setAdminRegFilter(e.target.value)}
+                                                className="border border-gray-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none flex-grow sm:w-64"
+                                            >
+                                                <option value="all">全部社團 ({registrations.length}筆)</option>
+                                                {clubs.map(c => (
+                                                <option key={c.id} value={c.id}>
+                                                    {c.name} ({getClubStats(c.id).mainCount + getClubStats(c.id).reserveCount}人)
+                                                </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                                        <table className="w-full text-left">
+                                            <thead className="bg-gray-100 text-gray-600 uppercase text-xs font-bold sticky top-0">
+                                                <tr>
+                                                    <th className="px-6 py-3">社團名稱</th>
+                                                    <th className="px-6 py-3">學生班級</th>
+                                                    <th className="px-6 py-3">學生姓名</th>
+                                                    <th className="px-6 py-3">家長姓名</th>
+                                                    <th className="px-6 py-3">電話</th>
+                                                    <th className="px-6 py-3">狀態</th>
+                                                    <th className="px-6 py-3 text-right">操作</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                                {filteredAdminRegs.length === 0 ? (
+                                                    <tr><td colSpan="7" className="px-6 py-8 text-center text-gray-400">無符合條件的報名資料</td></tr>
+                                                ) : (
+                                                    filteredAdminRegs.map(reg => (
+                                                        <tr key={reg.id} className="hover:bg-gray-50">
+                                                            <td className="px-6 py-3 font-medium">{reg.clubName}</td>
+                                                            <td className="px-6 py-3">{reg.studentClass}</td>
+                                                            <td className="px-6 py-3">{reg.studentName}</td>
+                                                            <td className="px-6 py-3 text-sm text-gray-600">{reg.parentName}</td>
+                                                            <td className="px-6 py-3 text-sm text-gray-600">{reg.parentPhone}</td>
+                                                            <td className="px-6 py-3">
+                                                                <span className={`px-2 py-1 rounded text-xs font-bold ${reg.status === 'main' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                                                                    {reg.status === 'main' ? '正取' : '備取'}
+                                                                </span>
+                                                            </td>
+                                                            <td className="px-6 py-3 text-right">
+                                                                <button 
+                                                                    onClick={() => handleCancelRegistration(reg.id)}
+                                                                    className="text-red-500 hover:bg-red-50 p-1.5 rounded transition" 
+                                                                    title="刪除報名"
+                                                                >
+                                                                    <Trash2 size={16} />
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    ))
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </section>
+                            </>
+                        )}
+
+                        <div className={`p-4 rounded-xl border flex items-center justify-between ${isRegistrationOpen ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                            <div className="flex items-center gap-3">
+                                <Clock className={isRegistrationOpen ? 'text-green-600' : 'text-red-600'} />
+                                <div>
+                                    <h3 className="font-bold text-lg">{isRegistrationOpen ? '目前開放報名中' : '目前非報名時間'}</h3>
+                                    <p className="text-sm opacity-80">{settings.start && settings.end ? `${settings.start.replace('T', ' ')} ~ ${settings.end.replace('T', ' ')}` : '尚未設定時間'}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* My Registrations List */}
+                        {user && !isAdmin && (
+                            <section className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                <div className="px-6 py-4 border-b border-gray-200 bg-blue-50">
+                                    <h2 className="text-xl font-bold text-blue-900 flex items-center gap-2">
+                                        <List size={20} /> 我的報名清單
+                                    </h2>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-left">
+                                        <thead className="bg-gray-100 text-gray-600 uppercase text-xs font-bold">
+                                            <tr>
+                                                <th className="px-6 py-3">社團名稱</th>
+                                                <th className="px-6 py-3">學生班級</th>
+                                                <th className="px-6 py-3">學生姓名</th>
+                                                <th className="px-6 py-3">狀態</th>
+                                                <th className="px-6 py-3 text-right">操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {userRegistrations.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan="5" className="px-6 py-8 text-center text-gray-400">
+                                                        目前沒有報名任何社團
+                                                    </td>
+                                                </tr>
+                                            ) : (
+                                                userRegistrations.map(reg => (
+                                                    <tr key={reg.id} className="hover:bg-gray-50">
+                                                        <td className="px-6 py-4 font-bold text-gray-800">{reg.clubName}</td>
+                                                        <td className="px-6 py-4 text-gray-600">{reg.studentClass}</td>
+                                                        <td className="px-6 py-4 text-gray-600">{reg.studentName}</td>
+                                                        <td className="px-6 py-4">
+                                                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                                                                reg.status === 'main' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
+                                                            }`}>
+                                                                {reg.status === 'main' ? '正取' : '備取'}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-right">
+                                                            <button 
+                                                                onClick={() => handleCancelRegistration(reg.id)}
+                                                                className="text-red-500 hover:text-red-700 hover:bg-red-50 p-2 rounded-full transition"
+                                                                title="取消報名"
+                                                            >
+                                                                <XCircle size={20} />
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
+                        )}
+
+                        <section className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                            <div className="px-6 py-4 border-b border-gray-200"><h2 className="text-xl font-bold text-gray-800">所有社團列表</h2></div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left">
+                                    <thead className="bg-gray-100 text-gray-600 uppercase text-xs font-bold">
+                                        <tr>
+                                            <th className="px-6 py-3">社團名稱</th>
+                                            <th className="px-6 py-3">老師</th>
+                                            <th className="px-6 py-3">時間</th>
+                                            <th className="px-6 py-3">地點</th>
+                                            <th className="px-6 py-3">年級</th>
+                                            <th className="px-6 py-3">費用 (學+材)</th>
+                                            <th className="px-6 py-3 text-center">名額 (正/備)</th>
+                                            <th className="px-6 py-3 text-center">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100">
+                                        {clubs.length === 0 ? (
+                                            <tr><td colSpan="8" className="px-6 py-12 text-center text-gray-400">尚無社團資料</td></tr>
+                                        ) : (
+                                            clubs.map((club) => {
+                                                const { mainCount, reserveCount } = getClubStats(club.id);
+                                                const isFull = mainCount >= club.quota && reserveCount >= club.reserveQuota;
+                                                return (
+                                                    <tr key={club.id} className="hover:bg-blue-50 transition group">
+                                                        <td className="px-6 py-4"><div className="font-bold text-blue-900">{club.name}</div>{club.description && <div className="text-xs text-gray-500 mt-1 truncate max-w-[150px]" title={club.description}>{club.description}</div>}</td>
+                                                        <td className="px-6 py-4 text-sm text-gray-700">{club.teacher}</td>
+                                                        <td className="px-6 py-4 text-sm text-gray-700"><div className="flex items-center gap-1"><Clock size={14} className="text-gray-400"/>{club.time}</div></td>
+                                                        <td className="px-6 py-4 text-sm text-gray-700"><div className="flex items-center gap-1"><MapPin size={14} className="text-gray-400"/>{club.location}</div></td>
+                                                        <td className="px-6 py-4 text-sm text-gray-700"><span className="bg-gray-100 px-2 py-1 rounded text-xs">{club.grade}</span></td>
+                                                        <td className="px-6 py-4 text-sm text-gray-700"><div className="font-medium">${club.fee} + ${club.materialFee}</div></td>
+                                                        <td className="px-6 py-4 text-center"><div className="text-sm"><span className={`font-bold ${mainCount >= club.quota ? 'text-red-500' : 'text-green-600'}`}>{mainCount}/{club.quota}</span><span className="text-xs text-gray-400 mx-1">(正)</span><span className="text-gray-400">|</span><span className={`ml-1 font-bold ${reserveCount >= club.reserveQuota ? 'text-red-500' : 'text-orange-500'}`}>{reserveCount}/{club.reserveQuota}</span><span className="text-xs text-gray-400 mx-1">(備)</span></div></td>
+                                                        <td className="px-6 py-4 text-center">
+                                                            {isAdmin ? (
+                                                                <div className="flex justify-center gap-2"><button onClick={() => { setEditingClub(club); setClubModalOpen(true); }} className="p-1.5 bg-blue-100 text-blue-600 rounded hover:bg-blue-200"><Edit size={16}/></button><button onClick={() => handleDeleteClub(club.id)} className="p-1.5 bg-red-100 text-red-600 rounded hover:bg-red-200"><Trash2 size={16}/></button></div>
+                                                            ) : (
+                                                                <button onClick={() => handleRegisterClick(club)} disabled={!isRegistrationOpen || isFull} className={`px-4 py-1.5 rounded text-sm font-bold w-24 transition ${!isRegistrationOpen ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : isFull ? 'bg-gray-400 text-white cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md'}`}>{isFull ? '已額滿' : '報名'}</button>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                    </main>
+                    <footer className="bg-white border-t mt-12 py-8 text-center text-gray-500 text-sm"><p>© {new Date().getFullYear()} 新上國小課後社團報名系統 | System Designed for Demo</p></footer>
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+        // Remove unstyled content flash prevention
+        document.body.style.display = 'block';
+    </script>
+</body>
+</html>
